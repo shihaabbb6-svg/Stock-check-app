@@ -484,38 +484,74 @@
     });
   }
 
-  function parseInventoryWorkbook(workbook){
-    const sheetName = workbook.SheetNames[0];
-    const sheet = workbook.Sheets[sheetName];
-    const rows = XLSX.utils.sheet_to_json(sheet, {header:1, defval:null, raw:true});
+  function normalizeHeader(v){
+    return String(v==null?'':v).replace(/\u00a0/g,' ').trim().toLowerCase();
+  }
 
-    // find header row: first cell literally 'Item' (case-insensitive)
+  function rowsToInventory(rows){
     let headerIdx = -1;
+    let itemCol = -1, descCol = -1, onHandCol = -1;
     for(let i=0;i<rows.length;i++){
-      const r = rows[i];
-      if(r && r[0] && String(r[0]).trim().toLowerCase() === 'item'){ headerIdx = i; break; }
+      const r = rows[i] || [];
+      const header = r.map(normalizeHeader);
+      const possibleItem = header.findIndex(h => h === 'item' || h === 'item name' || h === 'item name/number' || h === 'item number' || h === 'sku');
+      const possibleOnHand = header.findIndex(h => h === 'on hand' || h.includes('on hand') || h === 'quantity on hand' || h === 'qty on hand');
+      if(possibleItem !== -1 && possibleOnHand !== -1){
+        headerIdx = i;
+        itemCol = possibleItem;
+        onHandCol = possibleOnHand;
+        descCol = header.findIndex(h => h === 'description' || h.includes('description'));
+        break;
+      }
     }
-    if(headerIdx === -1){
-      // fallback: assume first row with 3+ populated cells and a numeric-looking 4th col is data start
-      throw new Error("Could not find the 'Item' header row in this file. Make sure it's the NetSuite Physical Inventory Worksheet export.");
-    }
-    const header = rows[headerIdx].map(h => h ? String(h).trim().toLowerCase() : '');
-    const itemCol = header.indexOf('item');
-    let onHandCol = header.findIndex(h => h.indexOf('on hand') !== -1);
-    if(onHandCol === -1) onHandCol = 3; // fallback to known layout
-    const descCol = header.indexOf('description') !== -1 ? header.indexOf('description') : 1;
-
+    if(headerIdx === -1) throw new Error('Could not find Item and On Hand columns in this NetSuite file.');
     const out = [];
     for(let i=headerIdx+1;i<rows.length;i++){
-      const r = rows[i];
-      if(!r || r[itemCol]==null || String(r[itemCol]).trim()==='') continue;
-      const skuRaw = String(r[itemCol]).trim();
-      if(skuRaw.toLowerCase() === 'total') continue;
-      const desc = descCol!=null ? r[descCol] : '';
-      const onHand = Number(r[onHandCol]);
-      out.push([skuRaw, desc==null?'':String(desc).trim(), isNaN(onHand)?0:onHand]);
+      const r = rows[i] || [];
+      const rawItem = r[itemCol];
+      if(rawItem == null) continue;
+      const skuRaw = String(rawItem).trim();
+      if(!skuRaw || skuRaw.toLowerCase() === 'total') continue;
+      const desc = descCol !== -1 && r[descCol] != null ? String(r[descCol]).trim() : '';
+      const rawQty = r[onHandCol];
+      const cleanedQty = typeof rawQty === 'string' ? rawQty.replace(/,/g,'').trim() : rawQty;
+      const onHand = Number(cleanedQty);
+      out.push([skuRaw, desc, isNaN(onHand) ? 0 : onHand]);
     }
     return out;
+  }
+
+  function parseInventoryWorkbook(workbook){
+    for(const sheetName of workbook.SheetNames){
+      const sheet = workbook.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json(sheet, {header:1, defval:null, raw:true});
+      try{
+        const out = rowsToInventory(rows);
+        if(out.length) return out;
+      }catch(e){}
+    }
+    throw new Error('Could not find Item and On Hand columns in this workbook.');
+  }
+
+  function parseSpreadsheetML(text){
+    const xml = new DOMParser().parseFromString(text, 'application/xml');
+    if(xml.getElementsByTagName('parsererror').length) throw new Error('Invalid NetSuite XML spreadsheet.');
+    const rows = [];
+    const rowNodes = Array.from(xml.getElementsByTagNameNS('*', 'Row'));
+    rowNodes.forEach(rowNode=>{
+      const row = [];
+      let colIndex = 0;
+      const cells = Array.from(rowNode.getElementsByTagNameNS('*', 'Cell'));
+      cells.forEach(cell=>{
+        const idxAttr = cell.getAttributeNS('urn:schemas-microsoft-com:office:spreadsheet', 'Index') || cell.getAttribute('ss:Index') || cell.getAttribute('Index');
+        if(idxAttr) colIndex = Math.max(0, parseInt(idxAttr,10)-1);
+        const dataNode = cell.getElementsByTagNameNS('*', 'Data')[0];
+        row[colIndex] = dataNode ? dataNode.textContent : '';
+        colIndex++;
+      });
+      rows.push(row);
+    });
+    return rowsToInventory(rows);
   }
 
   async function handleInventoryFile(file){
@@ -524,11 +560,19 @@
       btn.classList.add('disabled');
       el('invStatus').textContent = 'Reading ' + file.name + '…';
       const buf = await file.arrayBuffer();
-      const wb = XLSX.read(buf, {type:'array'});
-      const arr = parseInventoryWorkbook(wb);
+      const bytes = new Uint8Array(buf);
+      const prefix = new TextDecoder('utf-8').decode(bytes.slice(0, 500)).trimStart();
+      let arr;
+      if(prefix.startsWith('<?xml') || prefix.includes('urn:schemas-microsoft-com:office:spreadsheet')){
+        const text = new TextDecoder('utf-8').decode(bytes);
+        arr = parseSpreadsheetML(text);
+      }else{
+        const wb = XLSX.read(buf, {type:'array'});
+        arr = parseInventoryWorkbook(wb);
+      }
       if(arr.length === 0) throw new Error('No inventory rows found in this file.');
       rebuildInventory(arr);
-      await window.storage.set('inventory-items', JSON.stringify(arr), true);
+      localStorage.setItem('inventory-items', JSON.stringify(arr));
       state.meta.invUpdatedAt = new Date().toISOString();
       state.meta.invCount = arr.length;
       state.meta.invFileName = file.name;
@@ -539,6 +583,7 @@
     }catch(e){
       showToast('Could not read file: ' + e.message);
     }finally{
+      btn.classList.remove('disabled');
       el('invStatus').textContent = statusTextInv();
     }
   }
