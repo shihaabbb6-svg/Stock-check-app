@@ -533,24 +533,45 @@
     throw new Error('Could not find Item and On Hand columns in this workbook.');
   }
 
+  function decodeXmlText(s){
+    // NetSuite's legacy SpreadsheetML export can contain bare "&" characters,
+    // which makes strict XML parsers reject an otherwise usable worksheet.
+    // Decode the common XML entities without requiring the whole document to be valid XML.
+    const ta = document.createElement('textarea');
+    ta.innerHTML = String(s || '')
+      .replace(/&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[0-9a-fA-F]+;)/g, '&amp;');
+    return ta.value;
+  }
+
   function parseSpreadsheetML(text){
-    const xml = new DOMParser().parseFromString(text, 'application/xml');
-    if(xml.getElementsByTagName('parsererror').length) throw new Error('Invalid NetSuite XML spreadsheet.');
     const rows = [];
-    const rowNodes = Array.from(xml.getElementsByTagNameNS('*', 'Row'));
-    rowNodes.forEach(rowNode=>{
+    const rowMatches = text.match(/<Row\b[^>]*>[\s\S]*?<\/Row>/gi) || [];
+
+    rowMatches.forEach(rowXml=>{
       const row = [];
       let colIndex = 0;
-      const cells = Array.from(rowNode.getElementsByTagNameNS('*', 'Cell'));
-      cells.forEach(cell=>{
-        const idxAttr = cell.getAttributeNS('urn:schemas-microsoft-com:office:spreadsheet', 'Index') || cell.getAttribute('ss:Index') || cell.getAttribute('Index');
-        if(idxAttr) colIndex = Math.max(0, parseInt(idxAttr,10)-1);
-        const dataNode = cell.getElementsByTagNameNS('*', 'Data')[0];
-        row[colIndex] = dataNode ? dataNode.textContent : '';
+      const cellRe = /<Cell\b([^>]*)>([\s\S]*?)<\/Cell>/gi;
+      let m;
+
+      while((m = cellRe.exec(rowXml))){
+        const attrs = m[1] || '';
+        const body = m[2] || '';
+        const idxMatch = attrs.match(/(?:ss:)?Index\s*=\s*["'](\d+)["']/i);
+        if(idxMatch) colIndex = Math.max(0, parseInt(idxMatch[1],10)-1);
+
+        const dataMatch = body.match(/<Data\b[^>]*>([\s\S]*?)<\/Data>/i);
+        let value = dataMatch ? dataMatch[1] : '';
+        value = value.replace(/<[^>]+>/g, '');
+        value = decodeXmlText(value).trim();
+
+        row[colIndex] = value;
         colIndex++;
-      });
+      }
+
       rows.push(row);
     });
+
+    if(!rows.length) throw new Error('No worksheet rows found in the NetSuite file.');
     return rowsToInventory(rows);
   }
 
