@@ -513,7 +513,7 @@
 
   // Increment this whenever the import logic changes.
   // This prevents old, incorrectly parsed browser data from surviving a new deployment.
-  const DATA_SCHEMA_VERSION = '3';
+  const DATA_SCHEMA_VERSION = '4-component-check';
 
   const state = {
     inventory: {},      // upperSku -> {sku, desc, onHand}
@@ -666,35 +666,48 @@
   }
 
   function parseSpreadsheetML(text){
+    // NetSuite exports an XML Spreadsheet 2003 file with an .xls extension.
+    // Parse every Row and every Cell in order, respecting ss:Index.
     const rows = [];
-    const rowMatches = text.match(/<Row\b[^>]*>[\s\S]*?<\/Row>/gi) || [];
+    const rowRe = /<Row\b[^>]*>([\s\S]*?)<\/Row>/gi;
+    let rowMatch;
 
-    rowMatches.forEach(rowXml=>{
+    while((rowMatch = rowRe.exec(text))){
+      const rowXml = rowMatch[1];
       const row = [];
       let colIndex = 0;
-      const cellRe = /<Cell\b([^>]*)>([\s\S]*?)<\/Cell>/gi;
-      let m;
 
-      while((m = cellRe.exec(rowXml))){
-        const attrs = m[1] || '';
-        const body = m[2] || '';
+      const cellRe = /<Cell\b([^>]*)>([\s\S]*?)<\/Cell>/gi;
+      let cellMatch;
+
+      while((cellMatch = cellRe.exec(rowXml))){
+        const attrs = cellMatch[1] || '';
+        const body = cellMatch[2] || '';
+
         const idxMatch = attrs.match(/(?:ss:)?Index\s*=\s*["'](\d+)["']/i);
-        if(idxMatch) colIndex = Math.max(0, parseInt(idxMatch[1],10)-1);
+        if(idxMatch) colIndex = Math.max(0, parseInt(idxMatch[1],10) - 1);
 
         const dataMatch = body.match(/<Data\b[^>]*>([\s\S]*?)<\/Data>/i);
         let value = dataMatch ? dataMatch[1] : '';
         value = value.replace(/<[^>]+>/g, '');
         value = decodeXmlText(value).trim();
 
+        while(row.length <= colIndex) row.push('');
         row[colIndex] = value;
         colIndex++;
       }
 
       rows.push(row);
-    });
+    }
 
     if(!rows.length) throw new Error('No worksheet rows found in the NetSuite file.');
-    return rowsToInventory(rows);
+
+    const out = rowsToInventory(rows);
+
+    // Sanity check: imported rows must retain numeric On Hand values.
+    if(!out.length) throw new Error('No inventory rows found in the NetSuite worksheet.');
+
+    return out;
   }
 
   async function handleInventoryFile(file){
@@ -821,15 +834,29 @@
 
   // ---------- search / evaluate ----------
   function evalComponent(code, qty){
-    const inv = state.inventory[code.toUpperCase()];
-    const isLabel = code.toUpperCase() === 'LAB';
+    const normalizedCode = String(code || '').trim().toUpperCase();
+    const isLabel = normalizedCode === 'LAB';
+
     if(isLabel){
-      return {code, qty, desc:'Label / non-stock item', onHand:null, ok:true, label:true};
+      return {code:normalizedCode, qty, desc:'Label / non-stock item', onHand:null, ok:true, label:true};
     }
+
+    // IMPORTANT: for combo SKUs we NEVER look up the whole combo string in NetSuite.
+    // Every component code is checked independently against the NetSuite inventory map.
+    const inv = state.inventory[normalizedCode];
+
     if(!inv){
-      return {code, qty, desc:null, onHand:null, ok:false, unknown:true};
+      return {code:normalizedCode, qty, desc:null, onHand:null, ok:false, unknown:true};
     }
-    return {code, qty, desc:inv.desc, onHand:inv.onHand, ok:inv.onHand >= qty};
+
+    const onHand = Number(inv.onHand);
+    return {
+      code: normalizedCode,
+      qty: Number(qty) || 1,
+      desc: inv.desc,
+      onHand: Number.isFinite(onHand) ? onHand : 0,
+      ok: Number.isFinite(onHand) && onHand >= (Number(qty) || 1)
+    };
   }
 
   function normalizedShopStatus(status){
@@ -853,13 +880,10 @@
   }
 
   function netSuiteProductQty(product){
-    const summary = productInventorySummary(product);
-    if(!summary.checkable.length || summary.anyUnknown) return null;
+    const parts = product.combo.map(([code,qty]) => evalComponent(code, qty)).filter(p => !p.label);
+    if(!parts.length || parts.some(p => p.unknown)) return null;
 
-    const possible = summary.checkable.map(p=>{
-      const need = Number(p.qty) || 1;
-      return Math.floor((Number(p.onHand) || 0) / need);
-    });
+    const possible = parts.map(p => Math.floor(p.onHand / (Number(p.qty) || 1)));
     return Math.min(...possible);
   }
 
