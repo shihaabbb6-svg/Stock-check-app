@@ -511,6 +511,10 @@
 <script>
 (function(){
 
+  // Increment this whenever the import logic changes.
+  // This prevents old, incorrectly parsed browser data from surviving a new deployment.
+  const DATA_SCHEMA_VERSION = '3';
+
   const state = {
     inventory: {},      // upperSku -> {sku, desc, onHand}
     shopBySku: {},       // upperSku(full combo string or single) -> product
@@ -550,23 +554,39 @@
   // ---------- storage ----------
   async function loadStored(){
     try{
-      const inv = localStorage.getItem('inventory-items');
-      if(inv){
-        rebuildInventory(JSON.parse(inv));
+      const savedVersion = localStorage.getItem('stock-check-schema-version');
+
+      // Older versions of this app could parse the NetSuite XML incorrectly
+      // and save zero quantities. Never trust that old parsed cache.
+      if(savedVersion !== DATA_SCHEMA_VERSION){
+        localStorage.removeItem('inventory-items');
+        localStorage.removeItem('shopify-products');
+        localStorage.removeItem('meta-info');
+      localStorage.removeItem('stock-check-schema-version');
+        localStorage.setItem('stock-check-schema-version', DATA_SCHEMA_VERSION);
+        state.meta = {};
+        renderMeta();
+        renderModeChooser();
+        renderEmpty();
+        renderAudit();
+        showToast('App updated — please upload the NetSuite and Shopify files again');
+        return;
       }
+    }catch(e){}
+
+    try{
+      const inv = localStorage.getItem('inventory-items');
+      if(inv) rebuildInventory(JSON.parse(inv));
     }catch(e){}
     try{
       const shop = localStorage.getItem('shopify-products');
-      if(shop){
-        rebuildShopify(JSON.parse(shop));
-      }
+      if(shop) rebuildShopify(JSON.parse(shop));
     }catch(e){}
     try{
       const meta = localStorage.getItem('meta-info');
-      if(meta){
-        state.meta = JSON.parse(meta);
-      }
+      if(meta) state.meta = JSON.parse(meta);
     }catch(e){}
+
     renderMeta();
     renderModeChooser();
     renderEmpty();
@@ -696,6 +716,7 @@
       if(arr.length === 0) throw new Error('No inventory rows found in this file.');
       rebuildInventory(arr);
       localStorage.setItem('inventory-items', JSON.stringify(arr));
+      localStorage.setItem('stock-check-schema-version', DATA_SCHEMA_VERSION);
       state.meta.invUpdatedAt = new Date().toISOString();
       state.meta.invCount = arr.length;
       state.meta.invFileName = file.name;
@@ -781,6 +802,7 @@
       if(arr.length === 0) throw new Error('No SKU rows found in this CSV.');
       rebuildShopify(arr);
       localStorage.setItem('shopify-products', JSON.stringify(arr));
+      localStorage.setItem('stock-check-schema-version', DATA_SCHEMA_VERSION);
       state.meta.shopUpdatedAt = new Date().toISOString();
       state.meta.shopCount = arr.length;
       state.meta.shopFileName = file.name;
@@ -1164,6 +1186,7 @@
       localStorage.removeItem('inventory-items');
       localStorage.removeItem('shopify-products');
       localStorage.removeItem('meta-info');
+      localStorage.removeItem('stock-check-schema-version');
     }catch(e){}
     state.inventory = {}; state.shopBySku = {}; state.shopByComponent = {}; state.meta = {};
     renderMeta();
