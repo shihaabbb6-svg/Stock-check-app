@@ -401,7 +401,7 @@
       </div>
     </div>
     <div class="panel-footnote">
-      Data is shared &mdash; whoever uploads the latest inventory file updates it for everyone using this app. Re-upload the NetSuite worksheet daily to keep quantities current.<br>
+      Data is saved in this browser on this device. Re-upload the NetSuite worksheet whenever you want to refresh quantities.<br>
       Combo SKUs (e.g. <code>SKU1+SKU2*2</code>) are parsed automatically. <code>LAB</code> components are treated as non-stock labels and ignored in availability checks.
     </div>
     <button class="reset-link" id="resetBtn">Clear all stored data</button>
@@ -450,23 +450,21 @@
   // ---------- storage ----------
   async function loadStored(){
     try{
-      const inv = await window.storage.get('inventory-items', true);
-      if(inv && inv.value){
-        const arr = JSON.parse(inv.value);
-        rebuildInventory(arr);
+      const inv = localStorage.getItem('inventory-items');
+      if(inv){
+        rebuildInventory(JSON.parse(inv));
       }
     }catch(e){}
     try{
-      const shop = await window.storage.get('shopify-products', true);
-      if(shop && shop.value){
-        const arr = JSON.parse(shop.value);
-        rebuildShopify(arr);
+      const shop = localStorage.getItem('shopify-products');
+      if(shop){
+        rebuildShopify(JSON.parse(shop));
       }
     }catch(e){}
     try{
-      const meta = await window.storage.get('meta-info', true);
-      if(meta && meta.value){
-        state.meta = JSON.parse(meta.value);
+      const meta = localStorage.getItem('meta-info');
+      if(meta){
+        state.meta = JSON.parse(meta);
       }
     }catch(e){}
     renderMeta();
@@ -474,7 +472,7 @@
   }
 
   async function persistMeta(){
-    try{ await window.storage.set('meta-info', JSON.stringify(state.meta), true); }catch(e){}
+    try{ localStorage.setItem('meta-info', JSON.stringify(state.meta)); }catch(e){}
   }
 
   // ---------- parsing: inventory ----------
@@ -600,7 +598,7 @@
       const arr = parseShopifyCsv(text);
       if(arr.length === 0) throw new Error('No SKU rows found in this CSV.');
       rebuildShopify(arr);
-      await window.storage.set('shopify-products', JSON.stringify(arr), true);
+      localStorage.setItem('shopify-products', JSON.stringify(arr));
       state.meta.shopUpdatedAt = new Date().toISOString();
       state.meta.shopCount = arr.length;
       state.meta.shopFileName = file.name;
@@ -821,9 +819,9 @@
   el('resetBtn').addEventListener('click', async ()=>{
     if(!confirm('This clears the inventory and catalog data for everyone using this app. Continue?')) return;
     try{
-      await window.storage.delete('inventory-items', true);
-      await window.storage.delete('shopify-products', true);
-      await window.storage.delete('meta-info', true);
+      localStorage.removeItem('inventory-items');
+      localStorage.removeItem('shopify-products');
+      localStorage.removeItem('meta-info');
     }catch(e){}
     state.inventory = {}; state.shopBySku = {}; state.shopByComponent = {}; state.meta = {};
     renderMeta();
