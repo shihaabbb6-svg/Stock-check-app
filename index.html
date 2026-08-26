@@ -830,6 +830,18 @@
     return {parts, checkable, anyUnknown, allOk, totalOnHand};
   }
 
+  function netSuiteProductQty(product){
+    const summary = productInventorySummary(product);
+    if(!summary.checkable.length || summary.anyUnknown) return null;
+
+    const possible = summary.checkable.map(p=>{
+      const need = Number(p.qty) || 1;
+      return Math.floor((Number(p.onHand) || 0) / need);
+    });
+    return Math.min(...possible);
+  }
+
+
   function renderProductCard(product){
     const summary = productInventorySummary(product);
     const parts = summary.parts;
@@ -876,7 +888,7 @@
         <div class="card-head">
           <div>
             <p class="card-title">${esc(product.title)}</p>
-            <div class="card-sub">SKU <b>${esc(product.sku)}</b>${isCombo ? ' · Combo · '+parts.length+' components' : ''}${shopStatusBadge(product.status)}</div>
+            <div class="card-sub">SKU <b>${esc(product.sku)}</b>${isCombo ? ' · Combo · '+parts.length+' components' : ''}${shopStatusBadge(product.status)} <span class="tag">NETSUITE QTY: ${netSuiteProductQty(product)==null?'?':fmtNum(netSuiteProductQty(product))}</span></div>
           </div>
           <div class="stamp ${stampClass}">${stampText}</div>
         </div>
@@ -933,13 +945,16 @@
   function auditQtyText(row){
     const parts = row.summary.checkable;
     const qty = netSuiteProductQty(row.product);
-    if(parts.length === 1) return qty==null ? '?' : fmtNum(qty);
+
+    if(parts.length === 1){
+      return `NetSuite qty: ${qty==null?'?':fmtNum(qty)}`;
+    }
 
     const componentText = parts
       .map(p=>`${p.code}: ${p.unknown?'?':fmtNum(p.onHand)} on hand / ${p.qty} needed`)
       .join(' · ');
 
-    return `Possible qty: ${qty==null?'?':fmtNum(qty)} · ${componentText}`;
+    return `NetSuite qty: ${qty==null?'?':fmtNum(qty)} · ${componentText}`;
   }
 
   function hasBothSources(){
