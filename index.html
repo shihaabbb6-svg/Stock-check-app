@@ -932,9 +932,14 @@
 
   function auditQtyText(row){
     const parts = row.summary.checkable;
-    if(parts.length === 1) return parts[0].unknown ? '?' : fmtNum(parts[0].onHand);
-    const failed = parts.filter(p=>!p.ok).map(p=>`${p.code}: ${p.unknown?'?':fmtNum(p.onHand)}/${p.qty}`);
-    return failed.length ? failed.join(', ') : 'Components OK';
+    const qty = netSuiteProductQty(row.product);
+    if(parts.length === 1) return qty==null ? '?' : fmtNum(qty);
+
+    const componentText = parts
+      .map(p=>`${p.code}: ${p.unknown?'?':fmtNum(p.onHand)} on hand / ${p.qty} needed`)
+      .join(' · ');
+
+    return `Possible qty: ${qty==null?'?':fmtNum(qty)} · ${componentText}`;
   }
 
   function hasBothSources(){
