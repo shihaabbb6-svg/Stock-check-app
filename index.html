@@ -239,6 +239,81 @@
     color:var(--ink-dim);
     margin-left:6px;
   }
+  .shop-status{
+    display:inline-block;
+    margin-left:8px;
+    padding:2px 7px;
+    border-radius:2px;
+    font-family:'Inter',sans-serif;
+    font-size:10px;
+    font-weight:700;
+    letter-spacing:0.05em;
+    text-transform:uppercase;
+    vertical-align:1px;
+  }
+  .shop-status.active{color:var(--green);background:var(--green-dim);}
+  .shop-status.draft{color:var(--amber);background:var(--amber-dim);}
+  .shop-status.archived{color:var(--rust);background:var(--rust-dim);}
+  .shop-status.unknown{color:var(--ink-dim);background:var(--slate-3);}
+
+  .mode-chooser{
+    margin:24px 0 10px;
+    display:none;
+    grid-template-columns:1fr 1fr;
+    gap:12px;
+  }
+  .mode-chooser.show{display:grid;}
+  .mode-btn{
+    border:1px solid var(--line);
+    background:var(--slate-2);
+    color:var(--ink);
+    border-radius:var(--radius);
+    padding:18px;
+    text-align:left;
+    cursor:pointer;
+    transition:border-color .15s ease, transform .15s ease;
+  }
+  .mode-btn:hover{border-color:var(--amber);transform:translateY(-1px);}
+  .mode-btn.active{border-color:var(--amber);}
+  .mode-btn-title{
+    display:block;
+    font-family:'Oswald',sans-serif;
+    text-transform:uppercase;
+    letter-spacing:.06em;
+    font-size:15px;
+    margin-bottom:5px;
+  }
+  .mode-btn-sub{display:block;color:var(--ink-dim);font-size:12px;line-height:1.45;}
+  .mode-btn-count{
+    font-family:'JetBrains Mono',monospace;
+    color:var(--amber);
+    margin-left:6px;
+  }
+  @media (max-width:600px){.mode-chooser{grid-template-columns:1fr;}}
+
+  .audit{
+    margin-top:28px;
+    border:1px solid var(--line);
+    background:var(--slate-2);
+    border-radius:var(--radius);
+    overflow:hidden;
+    display:none;
+  }
+  .audit.show{display:block;}
+  .audit-head{padding:16px 18px;border-bottom:1px solid var(--line);}
+  .audit-title{font-family:'Oswald',sans-serif;text-transform:uppercase;letter-spacing:.06em;font-size:15px;margin:0 0 5px;}
+  .audit-sub{font-size:12px;color:var(--ink-dim);line-height:1.5;}
+  .audit-tabs{display:flex;gap:8px;padding:12px 18px;border-bottom:1px solid var(--line);flex-wrap:wrap;}
+  .audit-tab{background:var(--slate-3);border:1px solid var(--line);color:var(--ink-dim);padding:8px 11px;border-radius:3px;cursor:pointer;font-size:12px;font-weight:600;}
+  .audit-tab.active{border-color:var(--amber);color:var(--ink);}
+  .audit-count{font-family:'JetBrains Mono',monospace;color:var(--amber);margin-left:5px;}
+  .audit-body{padding:0 18px 16px;max-height:520px;overflow:auto;}
+  .audit-table{width:100%;border-collapse:collapse;font-size:12px;}
+  .audit-table th{position:sticky;top:0;background:var(--slate-2);text-align:left;padding:11px 8px;color:var(--ink-dim);border-bottom:1px solid var(--line);font-size:10px;text-transform:uppercase;letter-spacing:.05em;}
+  .audit-table td{padding:10px 8px;border-bottom:1px solid var(--line);vertical-align:top;}
+  .audit-table td.code{font-family:'JetBrains Mono',monospace;color:var(--amber);}
+  .audit-table td.qty{font-family:'JetBrains Mono',monospace;}
+  .audit-empty{padding:28px 0;text-align:center;color:var(--ink-dim);font-size:13px;}
   .simple-qty{
     display:flex;align-items:baseline;gap:10px;
     font-family:'JetBrains Mono',monospace;
@@ -375,7 +450,30 @@
     </div>
   </div>
 
+  <div class="mode-chooser" id="modeChooser">
+    <button class="mode-btn" id="searchModeBtn">
+      <span class="mode-btn-title">Search Product</span>
+      <span class="mode-btn-sub">Check one SKU, its NetSuite stock, combo components and Shopify status.</span>
+    </button>
+    <button class="mode-btn" id="auditModeBtn">
+      <span class="mode-btn-title">View Mismatches <span class="mode-btn-count" id="mismatchTotal">0</span></span>
+      <span class="mode-btn-sub">See Shopify/NetSuite stock and status problems across the full catalog.</span>
+    </button>
+  </div>
+
   <div class="results" id="results"></div>
+
+  <section class="audit" id="auditPanel">
+    <div class="audit-head">
+      <div class="audit-title">Stock &amp; Shopify Status Audit</div>
+      <div class="audit-sub">Review products whose Shopify status does not match NetSuite stock.</div>
+    </div>
+    <div class="audit-tabs">
+      <button class="audit-tab active" id="tabActiveOos" data-audit="active-oos">Active on Shopify, no stock <span class="audit-count" id="countActiveOos">0</span></button>
+      <button class="audit-tab" id="tabDraftStock" data-audit="draft-stock">Draft on Shopify, in stock <span class="audit-count" id="countDraftStock">0</span></button>
+    </div>
+    <div class="audit-body" id="auditBody"></div>
+  </section>
 
   <button class="panel-toggle" id="panelToggle">
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="9 18 15 12 9 6"/></svg>
@@ -413,11 +511,17 @@
 <script>
 (function(){
 
+  // Increment this whenever the import logic changes.
+  // This prevents old, incorrectly parsed browser data from surviving a new deployment.
+  const DATA_SCHEMA_VERSION = '5-netsuite-empty-cell-fix';
+
   const state = {
     inventory: {},      // upperSku -> {sku, desc, onHand}
     shopBySku: {},       // upperSku(full combo string or single) -> product
     shopByComponent: {}, // upperComponentCode -> [product,...]
-    meta: {}
+    meta: {},
+    auditMode: 'active-oos',
+    uiMode: null
   };
 
   const el = id => document.getElementById(id);
@@ -450,25 +554,43 @@
   // ---------- storage ----------
   async function loadStored(){
     try{
-      const inv = localStorage.getItem('inventory-items');
-      if(inv){
-        rebuildInventory(JSON.parse(inv));
+      const savedVersion = localStorage.getItem('stock-check-schema-version');
+
+      // Older versions of this app could parse the NetSuite XML incorrectly
+      // and save zero quantities. Never trust that old parsed cache.
+      if(savedVersion !== DATA_SCHEMA_VERSION){
+        localStorage.removeItem('inventory-items');
+        localStorage.removeItem('shopify-products');
+        localStorage.removeItem('meta-info');
+      localStorage.removeItem('stock-check-schema-version');
+        localStorage.setItem('stock-check-schema-version', DATA_SCHEMA_VERSION);
+        state.meta = {};
+        renderMeta();
+        renderModeChooser();
+        renderEmpty();
+        renderAudit();
+        showToast('App updated — please upload the NetSuite and Shopify files again');
+        return;
       }
+    }catch(e){}
+
+    try{
+      const inv = localStorage.getItem('inventory-items');
+      if(inv) rebuildInventory(JSON.parse(inv));
     }catch(e){}
     try{
       const shop = localStorage.getItem('shopify-products');
-      if(shop){
-        rebuildShopify(JSON.parse(shop));
-      }
+      if(shop) rebuildShopify(JSON.parse(shop));
     }catch(e){}
     try{
       const meta = localStorage.getItem('meta-info');
-      if(meta){
-        state.meta = JSON.parse(meta);
-      }
+      if(meta) state.meta = JSON.parse(meta);
     }catch(e){}
+
     renderMeta();
+    renderModeChooser();
     renderEmpty();
+    renderAudit();
   }
 
   async function persistMeta(){
@@ -544,35 +666,62 @@
   }
 
   function parseSpreadsheetML(text){
+    // NetSuite's legacy XML .xls uses BOTH:
+    //   <Cell>...</Cell>
+    // and empty self-closing cells:
+    //   <Cell .../>
+    //
+    // Empty cells MUST still advance the column index. If they are skipped,
+    // "On Hand" shifts into the wrong column and valid quantities become 0.
     const rows = [];
-    const rowMatches = text.match(/<Row\b[^>]*>[\s\S]*?<\/Row>/gi) || [];
+    const rowRe = /<Row\b[^>]*>([\s\S]*?)<\/Row>/gi;
+    let rowMatch;
 
-    rowMatches.forEach(rowXml=>{
+    while((rowMatch = rowRe.exec(text))){
+      const rowXml = rowMatch[1];
       const row = [];
       let colIndex = 0;
-      const cellRe = /<Cell\b([^>]*)>([\s\S]*?)<\/Cell>/gi;
-      let m;
 
-      while((m = cellRe.exec(rowXml))){
-        const attrs = m[1] || '';
-        const body = m[2] || '';
+      // Match a normal Cell OR a self-closing Cell, in original order.
+      const cellRe = /<Cell\b([^>]*?)(?:\/>|>([\s\S]*?)<\/Cell>)/gi;
+      let cellMatch;
+
+      while((cellMatch = cellRe.exec(rowXml))){
+        const attrs = cellMatch[1] || '';
+        const body = cellMatch[2] || '';
+
         const idxMatch = attrs.match(/(?:ss:)?Index\s*=\s*["'](\d+)["']/i);
-        if(idxMatch) colIndex = Math.max(0, parseInt(idxMatch[1],10)-1);
+        if(idxMatch){
+          colIndex = Math.max(0, parseInt(idxMatch[1], 10) - 1);
+        }
 
-        const dataMatch = body.match(/<Data\b[^>]*>([\s\S]*?)<\/Data>/i);
-        let value = dataMatch ? dataMatch[1] : '';
-        value = value.replace(/<[^>]+>/g, '');
-        value = decodeXmlText(value).trim();
+        let value = '';
+        if(body){
+          const dataMatch = body.match(/<Data\b[^>]*>([\s\S]*?)<\/Data>/i);
+          value = dataMatch ? dataMatch[1] : '';
+          value = value.replace(/<[^>]+>/g, '');
+          value = decodeXmlText(value).trim();
+        }
 
+        while(row.length <= colIndex) row.push('');
         row[colIndex] = value;
+
+        // Even an empty <Cell .../> occupies one spreadsheet column.
         colIndex++;
       }
 
       rows.push(row);
-    });
+    }
 
-    if(!rows.length) throw new Error('No worksheet rows found in the NetSuite file.');
-    return rowsToInventory(rows);
+    if(!rows.length){
+      throw new Error('No worksheet rows found in the NetSuite file.');
+    }
+
+    const out = rowsToInventory(rows);
+    if(!out.length){
+      throw new Error('No inventory rows found in the NetSuite worksheet.');
+    }
+    return out;
   }
 
   async function handleInventoryFile(file){
@@ -594,13 +743,16 @@
       if(arr.length === 0) throw new Error('No inventory rows found in this file.');
       rebuildInventory(arr);
       localStorage.setItem('inventory-items', JSON.stringify(arr));
+      localStorage.setItem('stock-check-schema-version', DATA_SCHEMA_VERSION);
       state.meta.invUpdatedAt = new Date().toISOString();
       state.meta.invCount = arr.length;
       state.meta.invFileName = file.name;
       await persistMeta();
       renderMeta();
+      renderModeChooser();
       showToast('Inventory updated — ' + arr.length.toLocaleString() + ' SKUs loaded');
       rerunSearch();
+      renderAudit();
     }catch(e){
       showToast('Could not read file: ' + e.message);
     }finally{
@@ -643,16 +795,28 @@
     const parsed = Papa.parse(text, {header:true, skipEmptyLines:true});
     const rows = parsed.data;
     const out = [];
-    let lastTitle = '', lastHandle = '';
+    let lastTitle = '', lastHandle = '', lastStatus = '';
     rows.forEach(r=>{
-      const handle = (r['Handle']||'').trim();
-      let title = (r['Title']||'').trim();
+      const handle = String(r['Handle']||'').trim();
+      let title = String(r['Title']||'').trim();
       if(handle) lastHandle = handle;
       if(title) lastTitle = title; else title = lastTitle;
-      const sku = (r['Variant SKU']||'').trim();
+
+      let status = String(r['Status']||r['Product Status']||'').trim().toLowerCase();
+      if(status) lastStatus = status; else status = lastStatus;
+
+      // Fallback for older Shopify exports that have Published but no Status column.
+      if(!status && Object.prototype.hasOwnProperty.call(r, 'Published')){
+        const published = String(r['Published']||'').trim().toLowerCase();
+        if(published === 'true') status = 'active';
+        else if(published === 'false') status = 'draft';
+      }
+      if(!status) status = 'unknown';
+
+      const sku = String(r['Variant SKU']||'').trim();
       if(!sku) return;
       const combo = parseComboString(sku);
-      out.push({ sku, title: title || handle || sku, combo });
+      out.push({ sku, title: title || handle || sku, handle: handle || lastHandle, status, combo });
     });
     return out;
   }
@@ -665,13 +829,16 @@
       if(arr.length === 0) throw new Error('No SKU rows found in this CSV.');
       rebuildShopify(arr);
       localStorage.setItem('shopify-products', JSON.stringify(arr));
+      localStorage.setItem('stock-check-schema-version', DATA_SCHEMA_VERSION);
       state.meta.shopUpdatedAt = new Date().toISOString();
       state.meta.shopCount = arr.length;
       state.meta.shopFileName = file.name;
       await persistMeta();
       renderMeta();
+      renderModeChooser();
       showToast('Catalog updated — ' + arr.length.toLocaleString() + ' SKUs loaded');
       rerunSearch();
+      renderAudit();
     }catch(e){
       showToast('Could not read file: ' + e.message);
     }finally{
@@ -681,22 +848,66 @@
 
   // ---------- search / evaluate ----------
   function evalComponent(code, qty){
-    const inv = state.inventory[code.toUpperCase()];
-    const isLabel = code.toUpperCase() === 'LAB';
+    const normalizedCode = String(code || '').trim().toUpperCase();
+    const isLabel = normalizedCode === 'LAB';
+
     if(isLabel){
-      return {code, qty, desc:'Label / non-stock item', onHand:null, ok:true, label:true};
+      return {code:normalizedCode, qty, desc:'Label / non-stock item', onHand:null, ok:true, label:true};
     }
+
+    // IMPORTANT: for combo SKUs we NEVER look up the whole combo string in NetSuite.
+    // Every component code is checked independently against the NetSuite inventory map.
+    const inv = state.inventory[normalizedCode];
+
     if(!inv){
-      return {code, qty, desc:null, onHand:null, ok:false, unknown:true};
+      return {code:normalizedCode, qty, desc:null, onHand:null, ok:false, unknown:true};
     }
-    return {code, qty, desc:inv.desc, onHand:inv.onHand, ok:inv.onHand >= qty};
+
+    const onHand = Number(inv.onHand);
+    return {
+      code: normalizedCode,
+      qty: Number(qty) || 1,
+      desc: inv.desc,
+      onHand: Number.isFinite(onHand) ? onHand : 0,
+      ok: Number.isFinite(onHand) && onHand >= (Number(qty) || 1)
+    };
   }
 
-  function renderProductCard(product){
+  function normalizedShopStatus(status){
+    const s = String(status||'unknown').trim().toLowerCase();
+    return ['active','draft','archived'].includes(s) ? s : 'unknown';
+  }
+
+  function shopStatusBadge(status){
+    const s = normalizedShopStatus(status);
+    const label = s === 'unknown' ? 'Status unknown' : s;
+    return `<span class="shop-status ${s}">Shopify: ${esc(label)}</span>`;
+  }
+
+  function productInventorySummary(product){
     const parts = product.combo.map(([code,qty])=>evalComponent(code,qty));
     const checkable = parts.filter(p=>!p.label);
-    const allOk = checkable.length>0 && checkable.every(p=>p.ok);
     const anyUnknown = checkable.some(p=>p.unknown);
+    const allOk = checkable.length>0 && checkable.every(p=>p.ok);
+    const totalOnHand = checkable.length === 1 && !checkable[0].unknown ? checkable[0].onHand : null;
+    return {parts, checkable, anyUnknown, allOk, totalOnHand};
+  }
+
+  function netSuiteProductQty(product){
+    const parts = product.combo.map(([code,qty]) => evalComponent(code, qty)).filter(p => !p.label);
+    if(!parts.length || parts.some(p => p.unknown)) return null;
+
+    const possible = parts.map(p => Math.floor(p.onHand / (Number(p.qty) || 1)));
+    return Math.min(...possible);
+  }
+
+
+  function renderProductCard(product){
+    const summary = productInventorySummary(product);
+    const parts = summary.parts;
+    const checkable = summary.checkable;
+    const allOk = summary.allOk;
+    const anyUnknown = summary.anyUnknown;
     const isCombo = product.combo.length > 1;
 
     let stampClass = allOk ? 'ok' : 'no';
@@ -737,7 +948,7 @@
         <div class="card-head">
           <div>
             <p class="card-title">${esc(product.title)}</p>
-            <div class="card-sub">SKU <b>${esc(product.sku)}</b>${isCombo ? ' · Combo · '+parts.length+' components' : ''}</div>
+            <div class="card-sub">SKU <b>${esc(product.sku)}</b>${isCombo ? ' · Combo · '+parts.length+' components' : ''}${shopStatusBadge(product.status)} <span class="tag">NETSUITE QTY: ${netSuiteProductQty(product)==null?'?':fmtNum(netSuiteProductQty(product))}</span></div>
           </div>
           <div class="stamp ${stampClass}">${stampText}</div>
         </div>
@@ -765,6 +976,116 @@
         </div>
       </div>
     `;
+  }
+
+  function buildAuditRows(){
+    const activeOos = [];
+    const draftStock = [];
+
+    Object.values(state.shopBySku).forEach(product=>{
+      const status = normalizedShopStatus(product.status);
+      const summary = productInventorySummary(product);
+      if(summary.anyUnknown) return;
+
+      const isInStock = summary.allOk;
+      if(status === 'active' && !isInStock){
+        activeOos.push({product, summary});
+      }
+      if(status === 'draft' && isInStock){
+        draftStock.push({product, summary});
+      }
+    });
+
+    const sorter = (a,b)=>String(a.product.title||a.product.sku).localeCompare(String(b.product.title||b.product.sku));
+    activeOos.sort(sorter);
+    draftStock.sort(sorter);
+    return {activeOos, draftStock};
+  }
+
+  function auditQtyText(row){
+    const parts = row.summary.checkable;
+    const qty = netSuiteProductQty(row.product);
+
+    if(parts.length === 1){
+      return `NetSuite qty: ${qty==null?'?':fmtNum(qty)}`;
+    }
+
+    const componentText = parts
+      .map(p=>`${p.code}: ${p.unknown?'?':fmtNum(p.onHand)} on hand / ${p.qty} needed`)
+      .join(' · ');
+
+    return `NetSuite qty: ${qty==null?'?':fmtNum(qty)} · ${componentText}`;
+  }
+
+  function hasBothSources(){
+    return Object.keys(state.inventory).length > 0 && Object.keys(state.shopBySku).length > 0;
+  }
+
+  function renderModeChooser(){
+    const chooser = el('modeChooser');
+    if(!chooser) return;
+    const ready = hasBothSources();
+    chooser.classList.toggle('show', ready);
+    if(!ready) return;
+
+    const audit = buildAuditRows();
+    const total = audit.activeOos.length + audit.draftStock.length;
+    el('mismatchTotal').textContent = total.toLocaleString();
+
+    el('searchModeBtn').classList.toggle('active', state.uiMode === 'search');
+    el('auditModeBtn').classList.toggle('active', state.uiMode === 'audit');
+  }
+
+  function setUiMode(mode){
+    state.uiMode = mode;
+    renderModeChooser();
+
+    const auditPanel = el('auditPanel');
+    if(mode === 'audit'){
+      renderAudit();
+      auditPanel.scrollIntoView({behavior:'smooth', block:'start'});
+    }else{
+      auditPanel.classList.remove('show');
+      renderEmpty();
+      searchEl.focus();
+      searchEl.scrollIntoView({behavior:'smooth', block:'center'});
+    }
+  }
+
+  function renderAudit(){
+    const panel = el('auditPanel');
+    if(!panel) return;
+    const hasBoth = hasBothSources();
+    const shouldShow = hasBoth && state.uiMode === 'audit';
+    panel.classList.toggle('show', shouldShow);
+    if(!shouldShow) return;
+
+    const audit = buildAuditRows();
+    el('countActiveOos').textContent = audit.activeOos.length.toLocaleString();
+    el('countDraftStock').textContent = audit.draftStock.length.toLocaleString();
+
+    const rows = state.auditMode === 'draft-stock' ? audit.draftStock : audit.activeOos;
+    el('tabActiveOos').classList.toggle('active', state.auditMode === 'active-oos');
+    el('tabDraftStock').classList.toggle('active', state.auditMode === 'draft-stock');
+
+    if(!rows.length){
+      el('auditBody').innerHTML = `<div class="audit-empty">No mismatches found in this category.</div>`;
+      return;
+    }
+
+    el('auditBody').innerHTML = `
+      <table class="audit-table">
+        <thead><tr><th>SKU</th><th>Product</th><th>Shopify</th><th>NetSuite stock</th></tr></thead>
+        <tbody>
+          ${rows.map(({product,summary})=>`
+            <tr>
+              <td class="code">${esc(product.sku)}</td>
+              <td>${esc(product.title)}</td>
+              <td>${shopStatusBadge(product.status)}</td>
+              <td class="qty">${esc(auditQtyText({product,summary}))}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>`;
   }
 
   function renderEmpty(){
@@ -834,6 +1155,11 @@
   function rerunSearch(){ runSearch(searchEl.value); }
 
   searchEl.addEventListener('input', ()=>{
+    if(searchEl.value.length>0 && state.uiMode !== 'search'){
+      state.uiMode = 'search';
+      el('auditPanel').classList.remove('show');
+      renderModeChooser();
+    }
     clearBtn.classList.toggle('show', searchEl.value.length>0);
     clearTimeout(searchTimer);
     searchTimer = setTimeout(()=>runSearch(searchEl.value), 80);
@@ -867,6 +1193,16 @@
     el('countHint').textContent = state.meta.invUpdatedAt ? ('Inventory as of ' + fmtDate(state.meta.invUpdatedAt)) : '';
   }
 
+  el('searchModeBtn').addEventListener('click', ()=>setUiMode('search'));
+  el('auditModeBtn').addEventListener('click', ()=>setUiMode('audit'));
+
+  document.querySelectorAll('.audit-tab').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      state.auditMode = btn.dataset.audit;
+      renderAudit();
+    });
+  });
+
   // ---------- panel toggle ----------
   el('panelToggle').addEventListener('click', ()=>{
     el('panel').classList.toggle('open');
@@ -883,15 +1219,18 @@
   });
 
   el('resetBtn').addEventListener('click', async ()=>{
-    if(!confirm('This clears the inventory and catalog data for everyone using this app. Continue?')) return;
+    if(!confirm('This clears the inventory and catalog data saved in this browser. Continue?')) return;
     try{
       localStorage.removeItem('inventory-items');
       localStorage.removeItem('shopify-products');
       localStorage.removeItem('meta-info');
+      localStorage.removeItem('stock-check-schema-version');
     }catch(e){}
     state.inventory = {}; state.shopBySku = {}; state.shopByComponent = {}; state.meta = {};
     renderMeta();
+    renderModeChooser();
     renderEmpty();
+    renderAudit();
     showToast('Data cleared');
   });
 
